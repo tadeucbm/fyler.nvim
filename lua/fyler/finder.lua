@@ -212,10 +212,12 @@ H.build_action_dependency_graph = function(fs_actions, pseudo_root_path, errors)
     in_degree[u_index] = in_degree[u_index] + 1
   end
 
-  local queue = { trie_root }
-  local fs_action_parents = {}
+  -- Each queued node carries the actions on itself and its ancestors, so an
+  -- action is only ordered against its real parents, not every shallower one.
+  local queue = { { node = trie_root, parents = {} } }
   while #queue > 0 do
-    local current_node = table.remove(queue, 1)
+    local current = table.remove(queue, 1)
+    local current_node, fs_action_parents = current.node, current.parents
 
     local fs_action_siblings = {}
     for _, child in pairs(current_node.children) do
@@ -237,10 +239,9 @@ H.build_action_dependency_graph = function(fs_actions, pseudo_root_path, errors)
     end)
 
     for _, child in pairs(current_node.children) do
-      table.insert(queue, child)
+      local parents = vim.list_extend({}, fs_action_parents)
+      table.insert(queue, { node = child, parents = vim.list_extend(parents, child.value or {}) })
     end
-
-    vim.list_extend(fs_action_parents, fs_action_siblings)
   end
 
   return graph, in_degree

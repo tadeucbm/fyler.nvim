@@ -305,6 +305,19 @@ T['Finder with kind']['can create file'] = function(kind)
   helper.expect.equality(vim.fn.filereadable(helper.joinpath(tmpdir, 'new-file')), 1)
 end
 
+T['Finder with kind']['can delete file and create nested file together'] = function(kind)
+  local tmpdir = helper.get_tmpdir('data', { 'a-file', 'b-file' })
+  n.fwd_lua('require("fyler").setup')({})
+  n.fwd_lua('require("fyler").open')({ kind = kind, root_path = tmpdir })
+  vim.uv.sleep(10)
+  n.type_keys({ 'dd', 'o', 'new-dir/new-file', '<ESC>', ':w<CR>' })
+  vim.uv.sleep(10)
+  n.type_keys('y')
+  vim.uv.sleep(10)
+  helper.expect.equality(vim.fn.filereadable(helper.joinpath(tmpdir, 'a-file')), 0)
+  helper.expect.equality(vim.fn.filereadable(helper.joinpath(tmpdir, 'new-dir', 'new-file')), 1)
+end
+
 T['Finder with kind']['can copy file'] = function(kind)
   local tmpdir = helper.get_tmpdir('data', { 'a-file' })
   n.fwd_lua('require("fyler").setup')({})
