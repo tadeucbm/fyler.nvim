@@ -356,11 +356,36 @@ T['Finder with kind']['can search and end the search'] = function(kind)
   helper.expect.equality(lines:find('b%-file'), nil)
   helper.expect.match(n.api.nvim_get_current_line(), 'needle%-file')
 
+  -- A search that matches nothing leaves no stray line behind it.
+  n.lua([[require('fyler.finder').instance_get_or_nil():set_query('zzzz')]])
+  vim.uv.sleep(200)
+  helper.expect.equality(n.api.nvim_buf_get_lines(0, 0, -1, false), { '' })
+  n.lua([[require('fyler.finder').instance_get_or_nil():set_query('needle')]])
+  vim.uv.sleep(200)
+  helper.expect.equality(#n.api.nvim_buf_get_lines(0, 0, -1, false), 2)
+
   n.lua([[require('fyler.finder').instance_get_or_nil():set_query('')]])
   vim.uv.sleep(200)
   lines = table.concat(n.api.nvim_buf_get_lines(0, 0, -1, false), '\n')
   helper.expect.match(lines, 'b%-file')
   helper.expect.equality(lines:find('needle%-file'), nil)
+end
+
+T['Finder with kind']['can search from the prompt and open the best match'] = function(kind)
+  local tmpdir = helper.get_tmpdir('data', { 'a-dir/', 'a-dir/needle-file', 'b-file' })
+  vim.fn.system({ 'git', 'init', '-q', tmpdir })
+  n.fwd_lua('require("fyler").setup')({ search = { debounce_ms = 10 } })
+  n.fwd_lua('require("fyler").open')({ kind = kind, root_path = tmpdir })
+  vim.uv.sleep(10)
+  n.type_keys({ 'g/', 'zzz' })
+  vim.uv.sleep(200)
+  local finder_lines =
+    [[vim.api.nvim_buf_get_lines(require('fyler.finder').instance_get_or_nil(nil, 'main').buf_id, 0, -1, false)]]
+  helper.expect.equality(n.lua_get(finder_lines), { '' })
+
+  n.type_keys({ '<C-u>', 'needle', '<CR>' })
+  vim.uv.sleep(300)
+  helper.expect.match(n.api.nvim_buf_get_name(0), 'needle%-file$')
 end
 
 T['Finder with kind']['can switch to the buffers view'] = function(kind)

@@ -596,8 +596,11 @@ H.render_tree = function(instance, flat)
   local component = { tag = 'col', children = rows }
   local buf_tick = vim.b[instance.buf_id].changedtick
   local Files
-  if vim.b[instance.buf_id].fyler_prev_comp and buf_tick == (vim.b[instance.buf_id].fyler_prev_tick or -1) then
-    Files = libui.compose(component, vim.b[instance.buf_id].fyler_prev_comp)
+  local prev_comp = vim.b[instance.buf_id].fyler_prev_comp
+  -- An empty tree still leaves the buffer its one blank line, which a diff
+  -- against no rows would keep below the new ones.
+  if prev_comp and #prev_comp.children > 0 and buf_tick == (vim.b[instance.buf_id].fyler_prev_tick or -1) then
+    Files = libui.compose(component, prev_comp)
   else
     Files = libui.compose(component)
   end
@@ -640,6 +643,15 @@ H.render_tree = function(instance, flat)
         priority = 5000,
       })
     end
+  end
+
+  -- A view or a search that left nothing says so, instead of a blank window.
+  if instance.filter and #visible == 0 then
+    local empty = instance.query ~= '' and 'No matches' or (views.get(instance.view) or {}).empty or 'Nothing here'
+    pcall(vim.api.nvim_buf_set_extmark, instance.buf_id, hl_ns, 0, 0, {
+      virt_text = { { empty, 'FylerEmpty' } },
+      virt_text_pos = 'overlay',
+    })
   end
 
   vim.bo[instance.buf_id].modified = false
@@ -1203,9 +1215,33 @@ end
 --- Narrow the tree to the files fuzzy-matching `query`; an empty one ends
 --- the search.
 ---@param query string
-function Finder:set_query(query)
+---@param callback function|nil Called once the tree shows the matches
+function Finder:set_query(query, callback)
   self.query = query or ''
-  H.apply(self, { best = true })
+  H.apply(self, { best = true, callback = callback })
+end
+
+--- End a search whose matches were kept on screen.
+function Finder:clear_search()
+  if self.query ~= '' then self:set_query('') end
+end
+
+--- Move the cursor to the next (`step` 1) or previous (-1) file, past
+--- directories and around the ends of the tree.
+---@param step integer
+function Finder:step_file(step)
+  if not util.window_is_valid(self.win_id) then return end
+
+  local lines = vim.api.nvim_buf_get_lines(self.buf_id, 0, -1, false)
+  local row = vim.api.nvim_win_get_cursor(self.win_id)[1]
+  for _ = 1, #lines do
+    row = (row - 1 + step) % #lines + 1
+    local id = tonumber(lines[row]:match('/(%d+) '))
+    if id and state.store[id] and state.store[id].type ~= 'directory' then
+      vim.api.nvim_win_set_cursor(self.win_id, { row, 0 })
+      return
+    end
+  end
 end
 
 --- Open the search prompt.

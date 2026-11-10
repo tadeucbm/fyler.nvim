@@ -201,7 +201,10 @@ H.setup_highlights = function()
     FylerFloatTitle    = { bg = palette.bg, fg = palette.fg },
     FylerIndentGuide   = { fg = palette.grey },
     FylerNormal        = { fg = palette.fg },
+    FylerEmpty         = { fg = palette.grey },
+    FylerSearchCount   = { fg = palette.grey },
     FylerSearchInput   = { bg = palette.bg, fg = palette.fg },
+    FylerSearchHint    = { fg = palette.grey },
     FylerSearchMatch   = { fg = palette.blue, bold = true },
     FylerSearchPrompt  = { fg = palette.blue },
     FylerWinpickMarker = { bg = palette.blue, fg = palette.bg }

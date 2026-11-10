@@ -242,7 +242,8 @@ local M = {}
 --- with `position = 'bottom'`) narrows the tree
 --- to the files fuzzy-matching its text, within the current view. `<CR>`
 --- opens the file under the cursor, `<Tab>` keeps the matches and goes to
---- the tree, `<Esc>` ends the search and `<C-n>`/`<C-p>` move the cursor.
+--- the tree (where `<Esc>` ends the search), `<Esc>` ends the search and
+--- `<C-n>`/`<C-p>` move the cursor from file to file.
 ---
 --- A tree narrowed by a view or a search is read-only, since it shows only
 --- part of each directory. Several finders can share a tab when each is
@@ -384,6 +385,10 @@ local default_config = {
       ['g/'] = {
         action = 'search',
         desc = 'Search files',
+      },
+      ['<Esc>'] = {
+        action = 'clear_search',
+        desc = 'End search',
       },
       ['<Tab>'] = {
         action = 'cycle_view',

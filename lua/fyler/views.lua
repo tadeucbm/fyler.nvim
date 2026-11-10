@@ -6,6 +6,7 @@ local libpath = Fyler.import('fyler.lib.path')
 ---  Calls back with the absolute paths the view shows. A view without it
 ---  shows the whole tree.
 ---@field events string[]|nil Autocommand events after which the view lists again
+---@field empty string|nil Shown in place of the tree when the view lists nothing
 
 local M = {}
 
@@ -90,6 +91,7 @@ M.register('files', { title = 'Files' })
 
 M.register('changes', {
   title = 'Changes',
+  empty = 'No changes',
   list = function(finder, cb)
     local root = finder.state.pseudo_root_path
     run({ 'git', '-C', root, 'rev-parse', '--show-toplevel' }, function(top)
@@ -113,6 +115,7 @@ M.register('changes', {
 
 M.register('buffers', {
   title = 'Buffers',
+  empty = 'No open buffers',
   events = { 'BufAdd', 'BufDelete' },
   list = function(_, cb)
     local paths = {}
