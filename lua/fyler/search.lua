@@ -4,7 +4,7 @@ local M = {}
 
 local ns = vim.api.nvim_create_namespace('FylerSearch')
 
---- One-row prompt over the top of the finder window. The tree narrows to the
+--- One-row prompt over the top or the bottom of the finder window. The tree narrows to the
 --- fuzzy matches as the text changes.
 ---@param finder fyler.Finder
 function M.open(finder)
@@ -21,9 +21,13 @@ function M.open(finder)
     right_gravity = false,
   })
 
-  -- Placed by screen position, which lands on the window's winbar when it has
-  -- one, rather than on the first entry.
+  -- Placed by screen position: the top row is the window's winbar when it
+  -- has one, rather than the first entry; the bottom row is its last line.
   local row, col = unpack(vim.fn.win_screenpos(finder.win_id))
+  if cfg.position == 'bottom' then
+    local info = vim.fn.getwininfo(finder.win_id)[1]
+    row = row + info.winbar + info.height - 1
+  end
   local win_id = vim.api.nvim_open_win(buf_id, true, {
     relative = 'editor',
     row = row - 1,

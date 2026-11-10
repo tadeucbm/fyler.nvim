@@ -241,6 +241,8 @@ CONFIGURATION ~
     -- Live search: the prompt's text, how long typing settles before the tree
     -- narrows, and how many matches it keeps.
     search = {
+      -- Row of the finder the prompt covers: 'top' or 'bottom'.
+      position = 'top',
       prompt = '> ',
       debounce_ms = 80,
       max_results = 200,
@@ -415,7 +417,8 @@ narrows the tree to a list of paths; more can be added:
 <
 
 - `search` is a table value which configures the live search (`g/`, or
-`Fyler.search()`): a prompt over the top of the finder narrows the tree
+`Fyler.search()`): a prompt over the top of the finder (or the bottom,
+with `position = 'bottom'`) narrows the tree
 to the files fuzzy-matching its text, within the current view. `<CR>`
 opens the file under the cursor, `<Tab>` keeps the matches and goes to
 the tree, `<Esc>` ends the search and `<C-n>`/`<C-p>` move the cursor.

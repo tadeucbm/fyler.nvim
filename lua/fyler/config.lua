@@ -53,7 +53,7 @@ local M = {}
 ---@field kind fyler.FinderWindowKind
 ---@field kind_presets table<string, fyler.KindPresetConfig>
 ---@field mappings table<string, table<string, fyler.Mapping>>
----@field search { prompt: string, debounce_ms: integer, max_results: integer }
+---@field search { position: 'top'|'bottom', prompt: string, debounce_ms: integer, max_results: integer }
 ---@field ui fyler.UiConfig
 ---@field use_as_default_explorer boolean
 ---@field views string[]
@@ -238,7 +238,8 @@ local M = {}
 --- <
 ---
 --- - `search` is a table value which configures the live search (`g/`, or
---- `Fyler.search()`): a prompt over the top of the finder narrows the tree
+--- `Fyler.search()`): a prompt over the top of the finder (or the bottom,
+--- with `position = 'bottom'`) narrows the tree
 --- to the files fuzzy-matching its text, within the current view. `<CR>`
 --- opens the file under the cursor, `<Tab>` keeps the matches and goes to
 --- the tree, `<Esc>` ends the search and `<C-n>`/`<C-p>` move the cursor.
@@ -423,6 +424,8 @@ local default_config = {
   -- Live search: the prompt's text, how long typing settles before the tree
   -- narrows, and how many matches it keeps.
   search = {
+    -- Row of the finder the prompt covers: 'top' or 'bottom'.
+    position = 'top',
     prompt = '> ',
     debounce_ms = 80,
     max_results = 200,
