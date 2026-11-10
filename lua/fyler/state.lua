@@ -122,7 +122,7 @@ function M.new(root_path, scheme)
           for child_name, child_node in pairs(current_node.children) do
             local child_data = M.store[child_node.value]
             local child_key = libpath.to_key(child_data.path)
-            local child_meta = self.meta[child_key]
+            local child_meta = self.meta[child_key] or (opts.filter and opts.filter[child_key])
             if child_data.type == 'directory' and child_meta then
               if opts.force or not child_node.children then
                 child_node = update_target_node(child_node)
@@ -171,11 +171,19 @@ function M.new(root_path, scheme)
 
       -- The root node is never rendered and must not be filtered by hidden items,
       -- otherwise a dotfile root (e.g. ~/.config) would skip the whole subtree.
-      if depth > 0 and opts.skip_hidden and libfs.is_hidden(data.path, opts.hidden_items) then return end
+      -- A filter decides alone what shows, and opens every directory it kept.
+      local key = libpath.to_key(data.path)
+      if depth > 0 then
+        if opts.filter then
+          if not opts.filter[key] then return end
+        elseif opts.skip_hidden and libfs.is_hidden(data.path, opts.hidden_items) then
+          return
+        end
+      end
 
       callback(node, depth)
 
-      if data.type == 'directory' and self.meta[libpath.to_key(data.path)] then
+      if data.type == 'directory' and (self.meta[key] or opts.filter) then
         if node.children then
           local children
           if opts.sort_children then
@@ -200,7 +208,8 @@ function M.new(root_path, scheme)
   end
 
   ---@param hidden_items table|nil
-  function instance:to_lines(hidden_items)
+  ---@param filter table<string, boolean>|nil
+  function instance:to_lines(hidden_items, filter)
     local result = {}
 
     self:walk(function(node, depth)
@@ -209,10 +218,12 @@ function M.new(root_path, scheme)
       local entry = M.store[node.value]
       local item = { id = entry.id, path = entry.path, name = entry.name, type = entry.type, depth = depth - 1 }
 
-      if entry.type == 'directory' then item.expanded = self.meta[libpath.to_key(entry.path)] or false end
+      if entry.type == 'directory' then
+        item.expanded = filter ~= nil or self.meta[libpath.to_key(entry.path)] or false
+      end
 
       table.insert(result, item)
-    end, { sort_children = true, skip_hidden = hidden_items ~= nil, hidden_items = hidden_items })
+    end, { sort_children = true, skip_hidden = hidden_items ~= nil, hidden_items = hidden_items, filter = filter })
 
     return result
   end

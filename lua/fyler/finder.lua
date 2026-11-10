@@ -7,6 +7,8 @@ local libui = Fyler.import('fyler.lib.ui')
 local state = Fyler.import('fyler.state')
 local util = Fyler.import('fyler.util')
 local integration_window_picker = Fyler.import('fyler.integrations.window_picker')
+local search = Fyler.import('fyler.search')
+local views = Fyler.import('fyler.views')
 
 ---@class fyler.FSEntry
 ---@field path string
@@ -24,15 +26,25 @@ local integration_window_picker = Fyler.import('fyler.integrations.window_picker
 ---@field private _current_refresh_args table|nil
 ---@field private _id_to_line table|nil
 ---@field private _origin_buf_id integer|nil
+---@field private _base string[]|false|nil
+---@field private _files string[]|nil
+---@field private _apply_token table|nil
+---@field private _view_lnum table<string, integer>
 ---@field buf_id integer|nil
 ---@field cache table
+---@field filter { set: table<string, boolean>, marks: table|nil, count: integer }|nil
+---@field name string
 ---@field opts fyler.FinderOpts
+---@field query string
+---@field view string
 ---@field state fyler.FinderState
 ---@field win_id integer|nil
 
 ---@class (partial) fyler.FinderOpts : fyler.WindowConfig, fyler.Config
 ---@field scheme string|nil
 ---@field root_path string|nil
+---@field name string|nil Finders in one tab are told apart by name
+---@field view string|nil View the finder opens on
 
 ---@class fyler.WindowConfig : vim.api.keyset.win_config
 ---@field col integer|fyler.FinderWindowAlignment|nil
@@ -70,7 +82,7 @@ local integration_window_picker = Fyler.import('fyler.integrations.window_picker
 local M = {}
 local H = {}
 
----@type table<integer, fyler.Finder>
+---@type table<integer, table<string, fyler.Finder>>
 local instances = {}
 
 ---@class fyler.Finder
@@ -83,8 +95,9 @@ local Finder = {}
 H.buffer_name = function(instance)
   local scheme_name = instance.opts.scheme
   local pseudo_root_path = instance.state.pseudo_root_path
+  local suffix = instance.name == 'main' and '' or ('#' .. instance.name)
 
-  return ('fyler-%s://%s'):format(scheme_name, pseudo_root_path)
+  return ('fyler-%s://%s%s'):format(scheme_name, pseudo_root_path, suffix)
 end
 
 ---@private
@@ -517,8 +530,12 @@ H.new_instance = function(opts)
         }),
       },
     },
+    _view_lnum = {},
+    name = opts.name,
     opts = opts,
+    query = '',
     state = state.new(opts.root_path, opts.scheme),
+    view = opts.view,
   }
 
   setmetatable(instance, { __index = Finder })
@@ -533,6 +550,8 @@ H.normalize_opts = function(opts)
   opts = opts or {}
   opts.root_path = libpath.to_normalize(opts.root_path or vim.fn.getcwd(-1, -1))
   opts.scheme = opts.scheme or 'file'
+  opts.name = opts.name or 'main'
+  opts.view = opts.view or config.DATA.views[1] or 'files'
 
   return config.get_config(opts)
 end
@@ -587,6 +606,8 @@ H.render_tree = function(instance, flat)
 
   local hl_ns = vim.api.nvim_create_namespace('FylerFinderBuf' .. instance.buf_id)
 
+  vim.bo[instance.buf_id].modifiable = true
+
   for _, change in ipairs(Files.changes) do
     vim.api.nvim_buf_set_lines(instance.buf_id, change.start_row, change.end_row, false, change.lines)
   end
@@ -609,8 +630,23 @@ H.render_tree = function(instance, flat)
     pcall(vim.api.nvim_buf_set_extmark, instance.buf_id, hl_ns, em.row, em.col, em.opts)
   end
 
+  -- Search matches, drawn over the name highlights.
+  local marks = instance.filter and instance.filter.marks
+  for row, item in ipairs(marks and visible or {}) do
+    for _, mark in ipairs(marks[libpath.to_key(item.path)] or {}) do
+      pcall(vim.api.nvim_buf_set_extmark, instance.buf_id, hl_ns, row - 1, item._name_col + mark[1], {
+        hl_group = 'FylerSearchMatch',
+        end_col = item._name_col + mark[1] + mark[2],
+        priority = 5000,
+      })
+    end
+  end
+
   vim.bo[instance.buf_id].modified = false
   vim.bo[instance.buf_id].syntax = 'fyler_finder'
+  -- A filtered tree shows part of each directory, so editing it as text
+  -- would delete what it leaves out.
+  vim.bo[instance.buf_id].modifiable = instance.filter == nil
 
   return visible, hl_ns, Files.lines
 end
@@ -675,6 +711,7 @@ function Finder:close()
   self._refresh_count = nil
   self._pending_refresh = nil
   self._follow_token = nil
+  self._apply_token = nil
 
   if #vim.fn.win_findbuf(self.buf_id) == 0 then pcall(vim.api.nvim_buf_delete, self.buf_id, { force = true }) end
 
@@ -688,6 +725,12 @@ function Finder:cancel_follow() self._follow_token = nil end
 ---@param args { target_path: string|nil, force: boolean|nil }|nil
 function Finder:follow(args)
   args = args or {}
+
+  -- A filtered tree already shows all it is going to.
+  if self.filter or self.query ~= '' or (views.get(self.view) or {}).list then
+    if not self._refresh_count then self:reload() end
+    return
+  end
 
   local raw_path = libpath.to_normalize(args.target_path)
   if not (raw_path and vim.uv.fs_stat(libpath.to_rel(self.state.pseudo_root_path, raw_path))) then
@@ -736,6 +779,7 @@ end
 
 function Finder:mutate()
   if not vim.api.nvim_get_option_value('modified', { buf = self.buf_id }) then return end
+  if self.filter then return end
 
   local id_to_path = {}
   self.state:walk(function(node, depth)
@@ -1017,8 +1061,205 @@ function Finder:open()
   if #target_path > 0 and self.opts.follow_current_file then
     self:follow({ target_path = target_path, force = true })
   else
-    self:refresh({ force = true, recursive = true })
+    self:reload({ force = true, recursive = true })
   end
+end
+
+---@private
+---@param instance fyler.Finder
+---@param rels string[] Paths relative to the root
+---@param positions integer[][] Matched character indices of each path
+---@return table<string, integer[][]> marks Byte offset and length inside each entry's name
+H.build_search_marks = function(instance, rels, positions)
+  local marks = {}
+  for i, rel in ipairs(rels) do
+    local bytes = {}
+    for _, pos in ipairs(positions[i]) do
+      local from = vim.fn.byteidx(rel, pos)
+      bytes[#bytes + 1] = { from, vim.fn.byteidx(rel, pos + 1) - from }
+    end
+
+    local path, offset = instance.state.pseudo_root_path, 0
+    for segment in vim.gsplit(rel, '/', { plain = true }) do
+      path = libpath.do_join(path, segment)
+      local key = libpath.to_key(path)
+      for _, byte in ipairs(bytes) do
+        if byte[1] >= offset and byte[1] < offset + #segment then
+          marks[key] = marks[key] or {}
+          table.insert(marks[key], { byte[1] - offset, byte[2] })
+        end
+      end
+      offset = offset + #segment + 1
+    end
+  end
+  return marks
+end
+
+--- Narrow the tree to `paths` and the directories that hold them, or show
+--- all of it again when `paths` is nil.
+---@param paths string[]|nil Absolute paths
+---@param opts { marks: table|nil, force: boolean|nil, callback: function|nil }|nil
+function Finder:set_filter(paths, opts)
+  opts = opts or {}
+
+  if paths then
+    local root = self.state.pseudo_root_path
+    local set = {}
+    for _, path in ipairs(paths) do
+      local rel = libpath.to_rel(root, path)
+      if #rel > 0 and rel ~= '.' then
+        local accumulated = root
+        for _, segment in ipairs(libpath.do_split(rel)) do
+          accumulated = libpath.do_join(accumulated, segment)
+          set[libpath.to_key(accumulated)] = true
+        end
+      end
+    end
+    self.filter = { set = set, marks = opts.marks, count = #paths }
+  else
+    self.filter = nil
+  end
+
+  self:refresh({ recursive = true, force = opts.force, callback = opts.callback })
+end
+
+--- Work out what the view and the search query leave visible, then draw it.
+---@private
+---@param instance fyler.Finder
+---@param args { force: boolean|nil, callback: function|nil, best: boolean|nil }|nil
+H.apply = function(instance, args)
+  args = args or {}
+
+  local token = {}
+  instance._apply_token = token
+  local stale = function() return instance._apply_token ~= token end
+  local root = instance.state.pseudo_root_path
+  local view = views.get(instance.view) or {}
+
+  local function with_base(cb)
+    if not view.list then return cb(nil) end
+    if instance._base then return cb(instance._base) end
+    view.list(instance, function(paths)
+      instance._base = paths or {}
+      cb(instance._base)
+    end)
+  end
+
+  local function with_files(base, cb)
+    if base then return cb(base) end
+    if instance._files then return cb(instance._files) end
+    views.list_files(root, function(paths)
+      instance._files = paths
+      cb(paths)
+    end)
+  end
+
+  with_base(function(base)
+    if stale() then return end
+
+    if instance.query == '' then return instance:set_filter(base, { force = args.force, callback = args.callback }) end
+
+    with_files(base, function(candidates)
+      if stale() then return end
+
+      local rels = {}
+      for _, path in ipairs(candidates) do
+        local rel = libpath.to_rel(root, path)
+        if #rel > 0 and rel ~= '.' then rels[#rels + 1] = rel end
+      end
+
+      local matched, positions =
+        unpack(vim.fn.matchfuzzypos(rels, instance.query, { limit = instance.opts.search.max_results }))
+      local best = matched[1] and libpath.do_join(root, matched[1])
+
+      instance:set_filter(vim.tbl_map(function(rel) return libpath.do_join(root, rel) end, matched), {
+        force = args.force,
+        marks = H.build_search_marks(instance, matched, positions),
+        callback = H.chain_callbacks(args.callback, function()
+          -- The tree keeps its own order, so the cursor goes to the best match.
+          local id = args.best and best and state.store_path_id[libpath.to_key(best)]
+          if id and instance._id_to_line[id] then instance._view.lnum = instance._id_to_line[id] end
+        end),
+      })
+    end)
+  end)
+end
+
+--- Refresh, listing the view's paths and the search candidates afresh.
+---@param args table|nil Same as |Finder:refresh|
+function Finder:reload(args)
+  self._base = nil
+  self._files = nil
+
+  if self.query == '' and not (views.get(self.view) or {}).list then
+    self.filter = nil
+    self:refresh(args)
+    return
+  end
+
+  H.apply(self, { force = args and args.force, callback = args and args.callback })
+end
+
+--- Narrow the tree to the files fuzzy-matching `query`; an empty one ends
+--- the search.
+---@param query string
+function Finder:set_query(query)
+  self.query = query or ''
+  H.apply(self, { best = true })
+end
+
+--- Open the search prompt.
+function Finder:search() search.open(self) end
+
+---@param name string
+function Finder:set_view(name)
+  if not views.get(name) then
+    vim.notify(('Unknown view "%s"'):format(name), vim.log.levels.WARN, { title = 'Fyler.nvim' })
+    return
+  end
+  if name == self.view then return end
+
+  if util.window_is_valid(self.win_id) then self._view_lnum[self.view] = vim.api.nvim_win_get_cursor(self.win_id)[1] end
+
+  self.view = name
+  self.query = ''
+  self._base = nil
+  self:cancel_follow()
+
+  H.apply(self, {
+    force = true,
+    callback = function() self._view.lnum = self._view_lnum[name] or 1 end,
+  })
+end
+
+---@param args { step: integer|nil }|nil
+function Finder:cycle_view(args)
+  local names = self.opts.views
+  if #names == 0 then return end
+
+  local index = 0
+  for i, name in ipairs(names) do
+    if name == self.view then index = i end
+  end
+
+  self:set_view(names[(index - 1 + ((args or {}).step or 1)) % #names + 1])
+end
+
+---@return { name: string, view: string, views: string[], query: string, count: integer|nil, titles: table<string, string> }
+function Finder:status()
+  local titles = {}
+  for _, name in ipairs(self.opts.views) do
+    titles[name] = (views.get(name) or {}).title or name
+  end
+
+  return {
+    count = self.filter and self.filter.count or nil,
+    name = self.name,
+    query = self.query,
+    titles = titles,
+    view = self.view,
+    views = self.opts.views,
+  }
 end
 
 function Finder:refresh(args)
@@ -1036,16 +1277,23 @@ function Finder:refresh(args)
     return
   end
 
+  local filter = self.filter and self.filter.set
+  -- Every directory a filter kept has to be read, wherever it sits.
+  if filter then
+    target_path = self.state.pseudo_root_path
+    args.recursive = true
+  end
+
   self.state:update(
     target_path,
-    { recursive = args.recursive, force = args.force },
+    { recursive = args.recursive, force = args.force, filter = filter },
     vim.schedule_wrap(function()
       if not util.buffer_is_valid(self.buf_id) then
         self._is_refreshing = false
         return
       end
 
-      local flat = self.state:to_lines(self.cache.ui.hidden_items)
+      local flat = self.state:to_lines(self.cache.ui.hidden_items, self.filter and self.filter.set)
       local undolevels = vim.bo[self.buf_id].undolevels
       vim.bo[self.buf_id].undolevels = -1
 
@@ -1072,6 +1320,8 @@ function Finder:select(args)
   if node_data.type == 'link' then
     vim.notify('BROKEN SYMLINK: ' .. node_data.path, vim.log.levels.WARN)
   elseif node_data.type == 'directory' then
+    if self.filter then return end
+
     self.state:toggle(node_data.path)
     self:refresh({ recursive = true })
   else
@@ -1226,39 +1476,74 @@ function Finder:visit(args)
     end)
   end
 
-  self:refresh({ recursive = true })
+  self.query = ''
+  self:reload({ recursive = true })
 end
 
 M.instance_get = function(tab_id, opts)
   opts = H.normalize_opts(opts)
 
   tab_id = tab_id or vim.api.nvim_get_current_tabpage()
-  if instances[tab_id] and vim.deep_equal(instances[tab_id].opts, opts) then return instances[tab_id] end
+  instances[tab_id] = instances[tab_id] or {}
 
-  if instances[tab_id] then instances[tab_id]:close() end
+  local current = instances[tab_id][opts.name]
+  if current and vim.deep_equal(current.opts, opts) then return current end
 
-  instances[tab_id] = H.new_instance(opts)
+  if current then current:close() end
 
-  return instances[tab_id]
+  instances[tab_id][opts.name] = H.new_instance(opts)
+
+  return instances[tab_id][opts.name]
 end
 
+--- Every finder of the tab that is on screen.
 ---@param tab_id integer|nil
----@return fyler.Finder|nil
-M.instance_get_or_nil = function(tab_id)
+---@return fyler.Finder[]
+M.instances_list = function(tab_id)
   tab_id = tab_id or vim.api.nvim_get_current_tabpage()
 
-  local inst = instances[tab_id]
-  if inst and util.window_is_valid(inst.win_id) and util.buffer_is_valid(inst.buf_id) then return inst end
+  local list = {}
+  for _, inst in pairs(instances[tab_id] or {}) do
+    if util.window_is_valid(inst.win_id) and util.buffer_is_valid(inst.buf_id) then list[#list + 1] = inst end
+  end
+  table.sort(list, function(a, b) return a.name < b.name end)
 
-  return nil
+  return list
+end
+
+--- A finder of the tab that is on screen: the one called `name`, or else
+--- the one in the current window, then `main`, then any other.
+---@param tab_id integer|nil
+---@param name string|nil
+---@return fyler.Finder|nil
+M.instance_get_or_nil = function(tab_id, name)
+  local list = M.instances_list(tab_id)
+  local current_win = vim.api.nvim_get_current_win()
+
+  local main
+  for _, inst in ipairs(list) do
+    if name then
+      if inst.name == name then return inst end
+    elseif inst.win_id == current_win then
+      return inst
+    elseif inst.name == 'main' then
+      main = inst
+    end
+  end
+
+  if name then return nil end
+
+  return main or list[1]
 end
 
 H.cancel_follow_on_mouse = function(key, typed)
   local keys = #typed > 0 and typed or key
   if keys:byte(1) ~= 0x80 or not vim.fn.keytrans(keys):find('Mouse', 1, true) then return end
 
-  local instance = M.instance_get_or_nil()
-  if instance and vim.fn.getmousepos().winid == instance.win_id then instance:cancel_follow() end
+  local winid = vim.fn.getmousepos().winid
+  for _, instance in ipairs(M.instances_list()) do
+    if winid == instance.win_id then instance:cancel_follow() end
+  end
 end
 
 vim.on_key(H.cancel_follow_on_mouse, vim.api.nvim_create_namespace('FylerFinderMouse'))

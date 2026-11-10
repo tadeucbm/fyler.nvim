@@ -53,8 +53,10 @@ local M = {}
 ---@field kind fyler.FinderWindowKind
 ---@field kind_presets table<string, fyler.KindPresetConfig>
 ---@field mappings table<string, table<string, fyler.Mapping>>
+---@field search { prompt: string, debounce_ms: integer, max_results: integer }
 ---@field ui fyler.UiConfig
 ---@field use_as_default_explorer boolean
+---@field views string[]
 ---@field win_opts table<string, any>
 
 --- CONFIGURATION ~
@@ -220,6 +222,33 @@ local M = {}
 ---   }
 --- <
 ---
+--- - `views` is a list of view names the finder cycles through (`<Tab>` and
+--- `<S-Tab>`, or `Fyler.view()`). `files` is the whole tree, `changes` the
+--- paths Git reports as changed and `buffers` the listed buffers. A view
+--- narrows the tree to a list of paths; more can be added:
+---
+--- >lua
+---   require('fyler.views').register('marked', {
+---     title = 'Marked',
+---     -- Calls back with absolute paths
+---     list = function(finder, cb) cb(my_marked_paths()) end,
+---     -- List again after these events
+---     events = { 'User' },
+---   })
+--- <
+---
+--- - `search` is a table value which configures the live search (`g/`, or
+--- `Fyler.search()`): a prompt over the top of the finder narrows the tree
+--- to the files fuzzy-matching its text, within the current view. `<CR>`
+--- opens the file under the cursor, `<Tab>` keeps the matches and goes to
+--- the tree, `<Esc>` ends the search and `<C-n>`/`<C-p>` move the cursor.
+---
+--- A tree narrowed by a view or a search is read-only, since it shows only
+--- part of each directory. Several finders can share a tab when each is
+--- opened with its own `name`, e.g.
+--- `Fyler.open({ name = 'changes', view = 'changes', kind = 'split_right_most' })`.
+--- `Fyler.status()` reports the view and the search query for a winbar.
+---
 --- - `use_as_default_explorer` is a boolean value which determine whether
 --- to use finder as the default file explorer.
 ---
@@ -351,6 +380,20 @@ local default_config = {
         args = { 'indent_guides' },
         desc = 'Toggle indent guides',
       },
+      ['g/'] = {
+        action = 'search',
+        desc = 'Search files',
+      },
+      ['<Tab>'] = {
+        action = 'cycle_view',
+        args = { step = 1 },
+        desc = 'Next view',
+      },
+      ['<S-Tab>'] = {
+        action = 'cycle_view',
+        args = { step = -1 },
+        desc = 'Previous view',
+      },
       ['q'] = {
         action = 'close',
         desc = 'Close finder',
@@ -373,6 +416,16 @@ local default_config = {
     },
     -- Whether to draw indent guides at each depth level.
     indent_guides = false,
+  },
+  -- Views the finder cycles through. `files` is the whole tree; the others
+  -- narrow it to a list of paths (see `require('fyler.views').register`).
+  views = { 'files', 'changes', 'buffers' },
+  -- Live search: the prompt's text, how long typing settles before the tree
+  -- narrows, and how many matches it keeps.
+  search = {
+    prompt = '> ',
+    debounce_ms = 80,
+    max_results = 200,
   },
   -- Follow the finder root as the tab-local working directory.
   follow_root_dir = true,

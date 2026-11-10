@@ -318,6 +318,69 @@ T['Finder with kind']['can delete file and create nested file together'] = funct
   helper.expect.equality(vim.fn.filereadable(helper.joinpath(tmpdir, 'new-dir', 'new-file')), 1)
 end
 
+T['Finder with kind']['can filter to paths and restore the tree'] = function(kind)
+  local tmpdir = helper.get_tmpdir('data', { 'a-dir/', 'a-dir/deep/', 'a-dir/deep/x-file', 'a-dir/y-file', 'b-file' })
+  n.fwd_lua('require("fyler").setup')({})
+  n.fwd_lua('require("fyler").open')({ kind = kind, root_path = tmpdir })
+  vim.uv.sleep(10)
+  n.lua([[require('fyler.finder').instance_get_or_nil():set_filter({ ... })]], { tmpdir .. '/a-dir/deep/x-file' })
+  vim.uv.sleep(20)
+  local lines = table.concat(n.api.nvim_buf_get_lines(0, 0, -1, false), '\n')
+  helper.expect.match(lines, 'a%-dir')
+  helper.expect.match(lines, 'deep')
+  helper.expect.match(lines, 'x%-file')
+  helper.expect.equality(lines:find('y%-file'), nil)
+  helper.expect.equality(lines:find('b%-file'), nil)
+  helper.expect.equality(n.bo.modifiable, false)
+
+  n.lua([[require('fyler.finder').instance_get_or_nil():set_filter(nil)]])
+  vim.uv.sleep(20)
+  lines = table.concat(n.api.nvim_buf_get_lines(0, 0, -1, false), '\n')
+  helper.expect.match(lines, 'b%-file')
+  helper.expect.equality(lines:find('x%-file'), nil)
+  helper.expect.equality(n.bo.modifiable, true)
+end
+
+T['Finder with kind']['can search and end the search'] = function(kind)
+  local tmpdir = helper.get_tmpdir('data', { 'a-dir/', 'a-dir/needle-file', 'a-dir/y-file', 'b-file' })
+  -- The repository's own ignore rules cover `tmp/`, so the fixture gets a
+  -- repository of its own for the search to list files from.
+  vim.fn.system({ 'git', 'init', '-q', tmpdir })
+  n.fwd_lua('require("fyler").setup')({})
+  n.fwd_lua('require("fyler").open')({ kind = kind, root_path = tmpdir })
+  vim.uv.sleep(10)
+  n.lua([[require('fyler.finder').instance_get_or_nil():set_query('needle')]])
+  vim.uv.sleep(200)
+  local lines = table.concat(n.api.nvim_buf_get_lines(0, 0, -1, false), '\n')
+  helper.expect.match(lines, 'needle%-file')
+  helper.expect.equality(lines:find('b%-file'), nil)
+  helper.expect.match(n.api.nvim_get_current_line(), 'needle%-file')
+
+  n.lua([[require('fyler.finder').instance_get_or_nil():set_query('')]])
+  vim.uv.sleep(200)
+  lines = table.concat(n.api.nvim_buf_get_lines(0, 0, -1, false), '\n')
+  helper.expect.match(lines, 'b%-file')
+  helper.expect.equality(lines:find('needle%-file'), nil)
+end
+
+T['Finder with kind']['can switch to the buffers view'] = function(kind)
+  local tmpdir = helper.get_tmpdir('data', { 'a-dir/', 'a-dir/x-file', 'b-file' })
+  n.fwd_lua('require("fyler").setup')({})
+  n.fwd_lua('vim.cmd.badd')(helper.joinpath(tmpdir, 'a-dir', 'x-file'))
+  n.fwd_lua('require("fyler").open')({ kind = kind, root_path = tmpdir })
+  vim.uv.sleep(10)
+  n.fwd_lua('require("fyler").view')({ view = 'buffers' })
+  vim.uv.sleep(50)
+  local lines = table.concat(n.api.nvim_buf_get_lines(0, 0, -1, false), '\n')
+  helper.expect.match(lines, 'x%-file')
+  helper.expect.equality(lines:find('b%-file'), nil)
+  helper.expect.equality(n.lua_get('require("fyler").status().view'), 'buffers')
+
+  n.fwd_lua('require("fyler").view')({ view = 'files' })
+  vim.uv.sleep(50)
+  helper.expect.match(table.concat(n.api.nvim_buf_get_lines(0, 0, -1, false), '\n'), 'b%-file')
+end
+
 T['Finder with kind']['can copy file'] = function(kind)
   local tmpdir = helper.get_tmpdir('data', { 'a-file' })
   n.fwd_lua('require("fyler").setup')({})

@@ -127,7 +127,7 @@ extensions.register({
               vim.schedule(function()
                 if not watch_state[buf_id] then return end
                 local pending = state.pending_refresh
-                pcall(function() instance:refresh(pending) end)
+                pcall(function() instance:reload(pending) end)
               end)
             end)
           end)

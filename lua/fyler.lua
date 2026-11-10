@@ -173,10 +173,9 @@ H.setup_autocmds = function()
       local buf_name = vim.api.nvim_buf_get_name(0)
       if not buf_name or buf_name == '' then return end
 
-      local instance = finder.instance_get_or_nil()
-      if not instance then return end
-
-      instance:follow({ target_path = buf_name })
+      for _, instance in ipairs(finder.instances_list()) do
+        instance:follow({ target_path = buf_name })
+      end
     end, 'Follow current file')
   end
 end
@@ -202,6 +201,9 @@ H.setup_highlights = function()
     FylerFloatTitle    = { bg = palette.bg, fg = palette.fg },
     FylerIndentGuide   = { fg = palette.grey },
     FylerNormal        = { fg = palette.fg },
+    FylerSearchInput   = { bg = palette.bg, fg = palette.fg },
+    FylerSearchMatch   = { fg = palette.blue, bold = true },
+    FylerSearchPrompt  = { fg = palette.blue },
     FylerWinpickMarker = { bg = palette.blue, fg = palette.bg }
   }
 
@@ -242,14 +244,47 @@ Fyler.setup = function(user_config)
   -- Public APIs --------------------
   local finder = Fyler.import('fyler.finder')
 
-  Fyler.close = function()
-    local inst = finder.instance_get_or_nil()
+  -- Each of these takes the name of a finder, and without one acts on the
+  -- finder in the current window, or else on the tab's main one.
+
+  ---@param opts { name: string|nil }|nil
+  Fyler.close = function(opts)
+    local inst = finder.instance_get_or_nil(nil, opts and opts.name)
     if inst then inst:close() end
   end
 
-  Fyler.getcwd = function()
-    local inst = finder.instance_get_or_nil()
+  ---@param opts { name: string|nil }|nil
+  Fyler.getcwd = function(opts)
+    local inst = finder.instance_get_or_nil(nil, opts and opts.name)
     if inst then return inst.state.pseudo_root_path end
+  end
+
+  -- Open the search prompt of a finder that is on screen.
+  ---@param opts { name: string|nil }|nil
+  Fyler.search = function(opts)
+    local inst = finder.instance_get_or_nil(nil, opts and opts.name)
+    if inst then inst:search() end
+  end
+
+  -- Switch a finder to `opts.view`, or step through its views without one.
+  ---@param opts { name: string|nil, view: string|nil, step: integer|nil }|nil
+  Fyler.view = function(opts)
+    opts = opts or {}
+    local inst = finder.instance_get_or_nil(nil, opts.name)
+    if not inst then return end
+    if opts.view then
+      inst:set_view(opts.view)
+    else
+      inst:cycle_view({ step = tonumber(opts.step) })
+    end
+  end
+
+  -- The view, its siblings, the search query and the number of paths a
+  -- filter kept: what a winbar or statusline needs.
+  ---@param opts { name: string|nil }|nil
+  Fyler.status = function(opts)
+    local inst = finder.instance_get_or_nil(nil, opts and opts.name)
+    if inst then return inst:status() end
   end
 
   ---@param opts fyler.FinderOpts|nil
